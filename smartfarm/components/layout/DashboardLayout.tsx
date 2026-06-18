@@ -12,7 +12,7 @@ type Props = {
 };
 
 const sidebarLinks = [
-  { href: '/', label: 'Home', icon: Home },
+  { href: '/dashboard', label: 'Home', icon: Home },
   { href: '/crops', label: 'Crops', icon: Wheat },
   { href: '/livestock', label: 'Livestock', icon: Beef },
   { href: '/inventory', label: 'Inventory', icon: Package },

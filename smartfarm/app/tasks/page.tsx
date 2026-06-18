@@ -68,14 +68,19 @@ export default function TasksPage() {
   const [list, setList] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
-  const [assignee, setAssignee] = useState('');
+  const [assigneeId, setAssigneeId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [loading, setLoading] = useState(true);
+  const [team, setTeam] = useState<any[]>([]);
 
   async function loadData() {
     try {
-      const data = await dbService.getTasks();
-      setList(data);
+      const [tasksData, teamData] = await Promise.all([
+        dbService.getTasks(),
+        dbService.getFarmTeam()
+      ]);
+      setList(tasksData);
+      setTeam(teamData);
     } catch (e) {
       console.error('Failed to load tasks:', e);
     } finally {
@@ -93,7 +98,7 @@ export default function TasksPage() {
 
     const n = { 
       title, 
-      assignee: assignee || 'Unassigned', 
+      assignee_id: assigneeId || undefined, 
       due_date: dueDate || new Date(Date.now() + 86400000).toISOString().split('T')[0], 
       status: 'pending' 
     };
@@ -103,7 +108,7 @@ export default function TasksPage() {
     
     // Reset inputs
     setTitle('');
-    setAssignee('');
+    setAssigneeId('');
     setDueDate('');
     setOpen(false);
     loadData();
@@ -184,12 +189,18 @@ export default function TasksPage() {
                     autoFocus
                     required
                   />
-                  <input 
-                    value={assignee} 
-                    onChange={(e) => setAssignee(e.target.value)} 
-                    placeholder="Assignee Name (e.g. Aminata)" 
+                  <select 
+                    value={assigneeId} 
+                    onChange={(e) => setAssigneeId(e.target.value)} 
                     className="p-3 border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-sm text-slate-900 dark:text-white" 
-                  />
+                  >
+                    <option value="">Unassigned</option>
+                    {team.map((member) => (
+                      <option key={member.user_id} value={member.user_id}>
+                        {member.users?.email || 'Unknown User'} ({member.role})
+                      </option>
+                    ))}
+                  </select>
                   <input 
                     type="date"
                     value={dueDate} 

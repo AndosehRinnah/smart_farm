@@ -176,7 +176,9 @@ export const dbService = {
   },
 
   async getFields(): Promise<DbObject[]> {
-    const { data, error } = await supabase.from('fields').select('*').order('created_at', { ascending: false });
+    const farmId = await getFarmId();
+    if (!farmId) return [];
+    const { data, error } = await supabase.from('fields').select('*').eq('farm_id', farmId).order('created_at', { ascending: false });
     if (error) {
       console.error('Supabase Fields Read Error:', error);
       return [];
@@ -263,9 +265,12 @@ export const dbService = {
   },
 
   async getLivestock(): Promise<DbObject[]> {
+    const farmId = await getFarmId();
+    if (!farmId) return [];
     const { data, error } = await supabase
       .from('livestock_units')
       .select('*, type:livestock_types(name)')
+      .eq('farm_id', farmId)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -351,7 +356,9 @@ export const dbService = {
   },
 
   async getInventory(): Promise<DbObject[]> {
-    const { data, error } = await supabase.from('inventory_items').select('*').order('created_at', { ascending: false });
+    const farmId = await getFarmId();
+    if (!farmId) return [];
+    const { data, error } = await supabase.from('inventory_items').select('*').eq('farm_id', farmId).order('created_at', { ascending: false });
     if (error) {
       console.error('Supabase Inventory Read Error:', error);
       return [];
@@ -426,9 +433,12 @@ export const dbService = {
   },
 
   async getTransactions(): Promise<DbObject[]> {
+    const farmId = await getFarmId();
+    if (!farmId) return [];
     const { data, error } = await supabase
       .from('financial_transactions')
       .select('*, category:financial_transaction_categories(*)')
+      .eq('farm_id', farmId)
       .order('occurred_on', { ascending: false });
 
     if (error) {
@@ -522,20 +532,30 @@ export const dbService = {
   },
 
   async getCategories(): Promise<DbObject[]> {
-    const { data, error } = await supabase.from('financial_transaction_categories').select('*');
+    const farmId = await getFarmId();
+    if (!farmId) return [];
+    const { data, error } = await supabase
+      .from('financial_transaction_categories')
+      .select('id, name, description')
+      .eq('farm_id', farmId);
     if (error) {
       console.error('Supabase Categories Read Error:', error);
       return [];
     }
-    return data.map((category: DbObject) => ({
-      icon: category.icon || 'circle-dollar-sign',
+    return (data || []).map((category: DbObject) => ({
+      id: category.id,
+      name: category.name || 'Uncategorized',
+      description: category.description || '',
     }));
   },
 
   async getTasks(): Promise<DbObject[]> {
+    const farmId = await getFarmId();
+    if (!farmId) return [];
     const { data, error } = await supabase
       .from('tasks')
-      .select('*, status:task_statuses(name)')
+      .select('*, status:task_statuses(name), task_assignments(worker_user_id)')
+      .eq('farm_id', farmId)
       .order('due_date', { ascending: true });
 
     if (error) {
@@ -545,11 +565,16 @@ export const dbService = {
 
     return data.map((task: DbObject) => {
       const statusObj = task.status as DbObject | undefined;
+      const assignments = task.task_assignments as any[] | undefined;
+      // auth.users isn't directly joinable; show truncated user_id or 'Unassigned'
+      const assigneeId = assignments && assignments.length > 0 ? assignments[0].worker_user_id as string : null;
+      const assigneeLabel = assigneeId ? assigneeId.slice(0, 8) + '…' : 'Unassigned';
+      
       return {
         ...task,
         status: typeof statusObj?.name === 'string' ? statusObj.name : 'pending',
         dueDate: task.due_date || null,
-        assignee: task.assignee || 'Unassigned',
+        assignee: task.assignee || assigneeLabel,
       };
     });
   },
@@ -575,6 +600,15 @@ export const dbService = {
       return null;
     }
     const created = data?.[0];
+
+    if (created && task.assignee_id) {
+      await supabase.from('task_assignments').insert({
+        farm_id: farmId,
+        task_id: created.id,
+        worker_user_id: task.assignee_id
+      });
+    }
+
     return {
       ...created,
       status: task.status || 'pending',
@@ -598,6 +632,20 @@ export const dbService = {
       return null;
     }
     const updated = data?.[0];
+
+    if (updated && updates.assignee_id !== undefined) {
+      const farmId = await getFarmId();
+      // Delete old assignments
+      await supabase.from('task_assignments').delete().eq('task_id', id);
+      if (updates.assignee_id) {
+        await supabase.from('task_assignments').insert({
+          farm_id: farmId,
+          task_id: id,
+          worker_user_id: updates.assignee_id
+        });
+      }
+    }
+
     return {
       ...updated,
       status: updates.status || updated.status || 'pending',
@@ -615,12 +663,36 @@ export const dbService = {
     return true;
   },
 
-  async getFarmProfile(): Promise<{name: string, location?: string} | null> {
+  async getFarmProfile(): Promise<{id: string, name: string, location?: string} | null> {
     const farmId = await getFarmId();
     if (!farmId) return null;
-    const { data, error } = await supabase.from('farm').select('name, location').eq('id', farmId).single();
+    const { data, error } = await supabase.from('farm').select('id, name, country, region').eq('id', farmId).single();
     if (error) return null;
-    return data as any;
+    const d = data as any;
+    return {
+      id: d.id,
+      name: d.name,
+      location: [d.region, d.country].filter(Boolean).join(', ') || undefined,
+    };
+  },
+
+  async updateFarmProfile(updates: { name?: string; location?: string }): Promise<boolean> {
+    const farmId = await getFarmId();
+    if (!farmId) return false;
+    const payload: DbObject = {};
+    if (updates.name) payload.name = updates.name;
+    // location is stored as "region, country" — split on first comma
+    if (updates.location !== undefined) {
+      const parts = updates.location.split(',').map((s) => s.trim());
+      payload.region = parts[0] || null;
+      payload.country = parts[1] || null;
+    }
+    const { error } = await supabase.from('farm').update(payload).eq('id', farmId);
+    if (error) {
+      console.error('Supabase Farm Profile Update Error:', error);
+      return false;
+    }
+    return true;
   },
 
   async getFarmTeam(): Promise<any[]> {
@@ -628,10 +700,40 @@ export const dbService = {
     if (!farmId) return [];
     const { data, error } = await supabase
       .from('farm_user_roles')
-      .select('role, users(email)')
+      .select('role, user_id')
       .eq('farm_id', farmId);
     if (error) return [];
-    return data || [];
+    // auth.users is not directly joinable from client; return user_id as display fallback
+    return (data || []).map((row: any) => ({
+      ...row,
+      users: { email: row.user_id },
+    }));
+  },
+
+  async joinFarm(joinCode: string): Promise<{ success: boolean; error?: string }> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: 'Not authenticated' };
+
+    // Check if farm exists
+    const { data: farm, error: farmError } = await supabase.from('farm').select('id').eq('id', joinCode).single();
+    if (farmError || !farm) return { success: false, error: 'Invalid Join Code' };
+
+    // Check if already a member
+    const { data: existing } = await supabase.from('farm_user_roles').select('id').eq('farm_id', joinCode).eq('user_id', user.id).single();
+    if (existing) return { success: false, error: 'You are already a member of this farm' };
+
+    // Insert
+    const { error: insertError } = await supabase.from('farm_user_roles').insert({
+      farm_id: joinCode,
+      user_id: user.id,
+      role: 'worker'
+    });
+
+    if (insertError) {
+      return { success: false, error: 'Failed to join farm' };
+    }
+
+    return { success: true };
   },
 
   async getReportsSummary(): Promise<any> {
