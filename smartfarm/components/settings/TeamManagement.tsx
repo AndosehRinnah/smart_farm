@@ -6,10 +6,6 @@ import { Copy, Check, UserPlus } from 'lucide-react';
 
 export function TeamManagement({ team, farmId }: { team: any[], farmId?: string }) {
   const [copied, setCopied] = useState(false);
-  const [joinCodeInput, setJoinCodeInput] = useState('');
-  const [joinError, setJoinError] = useState('');
-  const [joinSuccess, setJoinSuccess] = useState('');
-  const [isJoining, setIsJoining] = useState(false);
 
   const handleCopy = () => {
     if (!farmId) return;
@@ -73,30 +69,6 @@ export function TeamManagement({ team, farmId }: { team: any[], farmId?: string 
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
             </button>
           </div>
-        </div>
-
-        <div className="pt-4 border-t border-slate-200 dark:border-zinc-800">
-          <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-2">Join a Farm</h4>
-          <form onSubmit={handleJoin} className="flex gap-2">
-            <input 
-              type="text" 
-              placeholder="Enter Farm Join Code"
-              className="flex-1 p-2 text-sm border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              value={joinCodeInput}
-              onChange={(e) => setJoinCodeInput(e.target.value)}
-              disabled={isJoining}
-            />
-            <button 
-              type="submit" 
-              disabled={isJoining || !joinCodeInput.trim()}
-              className="px-3 py-2 bg-slate-900 text-white dark:bg-emerald-600 rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-emerald-500 disabled:opacity-50 transition-colors flex items-center gap-1"
-            >
-              <UserPlus className="w-4 h-4" />
-              Join
-            </button>
-          </form>
-          {joinError && <p className="text-xs text-red-500 mt-2">{joinError}</p>}
-          {joinSuccess && <p className="text-xs text-emerald-500 mt-2">{joinSuccess}</p>}
         </div>
       </div>
     </div>

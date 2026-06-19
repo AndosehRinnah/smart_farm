@@ -65,74 +65,51 @@ async function getOrCreateLivestockType(name: string, farmId: string): Promise<s
   return inserted?.id || null;
 }
 
-/** Fetch the first farm owned by the current authenticated user. */
+/** Fetch the active farm owned or joined by the current authenticated user. */
 async function getFarmId(): Promise<string | null> {
-  console.log('[getFarmId] Fetching user...');
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    console.error('[getFarmId] No user logged in.');
-    return null;
-  }
-  console.log(`[getFarmId] Found user ${user.id}`);
+  if (!user) return null;
 
-  // Try farm_user_roles table with user_id filter first
+  // 1. Check if user has an active farm selected in localStorage
+  let activeFarmId = null;
+  if (typeof window !== 'undefined') {
+    activeFarmId = localStorage.getItem('active_farm_id');
+  }
+
+  if (activeFarmId) {
+    // Verify the user actually has access to this active farm
+    const { data: roleData } = await supabase
+      .from('farm_user_roles')
+      .select('farm_id')
+      .eq('user_id', user.id)
+      .eq('farm_id', activeFarmId)
+      .limit(1)
+      .single();
+    if (roleData?.farm_id) {
+      return roleData.farm_id;
+    } else {
+      // Invalid or revoked access, clear it
+      if (typeof window !== 'undefined') localStorage.removeItem('active_farm_id');
+      activeFarmId = null;
+    }
+  }
+
+  // 2. Fetch all farms the user has access to, ordered by creation (oldest first, typically Main Farm)
+  // Actually, we'll just fetch the most recently joined/created one or just the first one.
   const { data: roleData, error: roleError } = await supabase
     .from('farm_user_roles')
     .select('farm_id')
     .eq('user_id', user.id)
-    .limit(1)
-    .single();
+    .limit(1);
 
-  if (roleError && roleError.code !== 'PGRST116') {
-    console.error('[getFarmId] Error checking farm_user_roles:', roleError);
+  if (!roleError && roleData && roleData.length > 0) {
+    const defaultFarmId = roleData[0].farm_id;
+    if (typeof window !== 'undefined') localStorage.setItem('active_farm_id', defaultFarmId);
+    return defaultFarmId;
   }
 
-  if (!roleError && roleData?.farm_id) {
-    console.log(`[getFarmId] Found existing farm linking: ${roleData.farm_id}`);
-    return roleData.farm_id;
-  }
-
-  console.log('[getFarmId] No existing farm linking found. Creating a new farm...');
-  
-  // Fallback: If farm doesn't exist, auto-create a default one for this user
-  const { data: newFarmData, error: insertError } = await supabase
-    .from('farm')
-    .insert([{ name: 'Main Farm' }])
-    .select('id');
-  
-  const newFarm = newFarmData?.[0];
-
-  if (insertError) {
-    console.error('[getFarmId] Supabase farm insert error:', insertError);
-  }
-
-  if (!newFarm?.id) {
-    console.error('[getFarmId] Farm inserted but no ID returned (RLS blocked read?). Attempting fallback query...');
-    // Last resort fallback
-    const { data: anyFarm, error: anyFarmError } = await supabase.from('farm').select('id').limit(1).single();
-    if (anyFarmError) {
-       console.error('[getFarmId] Any farm fallback query failed:', anyFarmError);
-    }
-    return anyFarm?.id || null;
-  }
-
-  console.log(`[getFarmId] Created new farm: ${newFarm.id}. Linking to user...`);
-
-  // Link the user to the new farm as an owner
-  const { error: linkError } = await supabase.from('farm_user_roles').insert([{
-    farm_id: newFarm.id,
-    user_id: user.id,
-    role: 'owner'
-  }]);
-
-  if (linkError) {
-    console.error('[getFarmId] Failed to link user to new farm:', linkError);
-    // Even if link fails, we return the farm so the operation can proceed
-  } else {
-    console.log(`[getFarmId] Successfully linked user to farm.`);
-  }
-
-  return newFarm.id;
+  // 3. Fallback: If no farm exists for this user, we return null so the frontend can prompt them.
+  return null;
 }
 
 /** Fetch or create a default financial account for the farm. */
@@ -161,6 +138,34 @@ async function getFinancialAccountId(farmId: string): Promise<string | null> {
 }
 
 export const dbService = {
+  async createFarm(name: string): Promise<{ id: string } | null> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+
+    const { data: newFarmData, error: insertError } = await supabase
+      .from('farm')
+      .insert([{ name: name || 'My Farm' }])
+      .select('id')
+      .single();
+
+    if (insertError || !newFarmData?.id) {
+      console.error('Failed to create farm:', insertError);
+      return null;
+    }
+
+    // Link the user to the new farm as an owner
+    await supabase.from('farm_user_roles').insert([{
+      farm_id: newFarmData.id,
+      user_id: user.id,
+      role: 'owner'
+    }]);
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('active_farm_id', newFarmData.id);
+    }
+    return { id: newFarmData.id };
+  },
+
   async getOverviewStats(): Promise<{ fields: number; workers: number; tasks: number }> {
     const [fields, workers, tasks] = await Promise.all([
       getCount('fields'),
@@ -369,7 +374,7 @@ export const dbService = {
       category: item.item_type || 'Inventory',
       qty: item.qty ?? 0,
       unit: item.unit || 'pcs',
-      lowStock: item.lowStock ?? false,
+      lowStock: item.low_stock ?? item.lowStock ?? false,
     }));
   },
 
@@ -386,6 +391,9 @@ export const dbService = {
       item_type: item.category,
       sku: item.sku || null,
     };
+    
+    // Note: If qty, unit, low_stock columns don't exist in Supabase yet, this will succeed
+    // but the frontend will read them as undefined/0 on next fetch.
     const { data, error } = await supabase.from('inventory_items').insert([payload]).select();
     if (error) {
       console.error('Supabase Inventory Insert Error:', error);
@@ -395,7 +403,7 @@ export const dbService = {
       id: data?.[0]?.id,
       name: data?.[0]?.name,
       category: item.category,
-      qty: item.qty ?? 0,
+      qty: item.qty ?? 0, // Fallback to provided quantity so UI updates optimistically if needed
       unit: item.unit || 'pcs',
       lowStock: item.lowStock ?? false,
     };
@@ -403,9 +411,9 @@ export const dbService = {
 
   async updateInventoryItem(id: string, updates: DbObject): Promise<DbObject | null> {
     const payload: DbObject = {};
-    if (updates.name) payload.name = updates.name;
-    if (updates.category) payload.item_type = updates.category;
-    if (updates.sku) payload.sku = updates.sku;
+    if (updates.name !== undefined) payload.name = updates.name;
+    if (updates.category !== undefined) payload.item_type = updates.category;
+    if (updates.sku !== undefined) payload.sku = updates.sku;
 
     const { data, error } = await supabase.from('inventory_items').update(payload).eq('id', id).select();
     if (error) {
@@ -563,18 +571,34 @@ export const dbService = {
       return [];
     }
 
+    // Fetch user profiles to resolve names
+    const userIds = [
+      ...new Set(data.map((t: any) => t.task_assignments?.[0]?.worker_user_id).filter(Boolean))
+    ];
+    let profilesMap: Record<string, string> = {};
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabase.from('user_profile').select('id, full_name').in('id', userIds);
+      if (profiles) {
+        profiles.forEach(p => {
+          if (p.full_name) profilesMap[p.id] = p.full_name;
+        });
+      }
+    }
+
     return data.map((task: DbObject) => {
       const statusObj = task.status as DbObject | undefined;
       const assignments = task.task_assignments as any[] | undefined;
-      // auth.users isn't directly joinable; show truncated user_id or 'Unassigned'
       const assigneeId = assignments && assignments.length > 0 ? assignments[0].worker_user_id as string : null;
-      const assigneeLabel = assigneeId ? assigneeId.slice(0, 8) + '…' : 'Unassigned';
+      const assigneeLabel = assigneeId 
+        ? (profilesMap[assigneeId] || assigneeId.slice(0, 8) + '…')
+        : 'Unassigned';
       
       return {
         ...task,
         status: typeof statusObj?.name === 'string' ? statusObj.name : 'pending',
         dueDate: task.due_date || null,
         assignee: task.assignee || assigneeLabel,
+        assignee_id: assigneeId,
       };
     });
   },
@@ -663,16 +687,30 @@ export const dbService = {
     return true;
   },
 
-  async getFarmProfile(): Promise<{id: string, name: string, location?: string} | null> {
+  async getFarmProfile(): Promise<{id: string, name: string, location?: string, currentUserRole?: string, currentUserId?: string} | null> {
     const farmId = await getFarmId();
     if (!farmId) return null;
+    
+    const { data: { user } } = await supabase.auth.getUser();
+
     const { data, error } = await supabase.from('farm').select('id, name, country, region').eq('id', farmId).single();
     if (error) return null;
     const d = data as any;
+    
+    let currentUserRole = 'worker';
+    if (user) {
+      const { data: roleData } = await supabase.from('farm_user_roles').select('role').eq('farm_id', farmId).eq('user_id', user.id).single();
+      if (roleData?.role) {
+        currentUserRole = roleData.role;
+      }
+    }
+
     return {
       id: d.id,
       name: d.name,
       location: [d.region, d.country].filter(Boolean).join(', ') || undefined,
+      currentUserRole,
+      currentUserId: user?.id
     };
   },
 
@@ -703,10 +741,21 @@ export const dbService = {
       .select('role, user_id')
       .eq('farm_id', farmId);
     if (error) return [];
-    // auth.users is not directly joinable from client; return user_id as display fallback
+    
+    const userIds = data.map((r: any) => r.user_id);
+    let profilesMap: Record<string, string> = {};
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabase.from('user_profile').select('id, full_name').in('id', userIds);
+      if (profiles) {
+        profiles.forEach(p => {
+          if (p.full_name) profilesMap[p.id] = p.full_name;
+        });
+      }
+    }
+
     return (data || []).map((row: any) => ({
       ...row,
-      users: { email: row.user_id },
+      users: { email: profilesMap[row.user_id] || row.user_id.slice(0, 8) + '…' },
     }));
   },
 
@@ -731,6 +780,10 @@ export const dbService = {
 
     if (insertError) {
       return { success: false, error: 'Failed to join farm' };
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('active_farm_id', joinCode);
     }
 
     return { success: true };

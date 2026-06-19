@@ -9,7 +9,7 @@ import { useAuth } from "../../components/providers/AuthProvider";
 import { dbService } from "../../lib/services/db";
 
 export default function SettingsPage() {
-  const { profile, team, loading } = useFarm();
+  const { profile, team, loading, currentUserRole } = useFarm();
   const { user } = useAuth();
 
   const [editing, setEditing] = useState(false);
@@ -35,7 +35,6 @@ export default function SettingsPage() {
     if (ok) {
       setEditing(false);
       setTimeout(() => setSaveMsg(null), 3000);
-      // Reload the page to show fresh data in the hook
       window.location.reload();
     }
   }
@@ -68,7 +67,7 @@ export default function SettingsPage() {
                     <Settings2 className="w-5 h-5 text-slate-500" />
                     <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">Farm Profile</h2>
                   </div>
-                  {!editing && (
+                  {!editing && currentUserRole !== 'worker' && (
                     <button
                       onClick={startEdit}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-colors"
@@ -79,7 +78,7 @@ export default function SettingsPage() {
                   )}
                 </div>
 
-                {editing ? (
+                {editing && currentUserRole !== 'worker' ? (
                   <form onSubmit={saveEdit} className="space-y-4">
                     <div>
                       <label className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase">Farm Name</label>
@@ -155,8 +154,8 @@ export default function SettingsPage() {
                     <p className="font-semibold text-slate-900 dark:text-slate-100 mt-1">{user?.email}</p>
                   </div>
                   <div>
-                    <label className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase">Role</label>
-                    <p className="font-semibold text-slate-900 dark:text-slate-100 mt-1 capitalize">{user?.role || 'Farm Owner'}</p>
+                    <label className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase">Farm Role</label>
+                    <p className="font-semibold text-slate-900 dark:text-slate-100 mt-1 capitalize">{currentUserRole}</p>
                   </div>
                 </div>
               </div>
@@ -164,7 +163,14 @@ export default function SettingsPage() {
 
             <div>
               <div className="bg-white/60 dark:bg-zinc-900/60 p-6 rounded-2xl border border-slate-200/50 dark:border-zinc-800/50">
-                <TeamManagement team={team} farmId={profile?.id} />
+                {currentUserRole !== 'worker' ? (
+                  <TeamManagement team={team} farmId={profile?.id} />
+                ) : (
+                  <div className="text-center py-6">
+                    <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">Worker Access</h3>
+                    <p className="text-sm text-slate-500 mt-2">Team management features are restricted to farm owners and managers.</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -173,3 +179,4 @@ export default function SettingsPage() {
     </DashboardLayout>
   );
 }
+
