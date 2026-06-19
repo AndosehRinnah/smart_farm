@@ -6,6 +6,10 @@ import { Copy, Check, UserPlus } from 'lucide-react';
 
 export function TeamManagement({ team, farmId }: { team: any[], farmId?: string }) {
   const [copied, setCopied] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [isJoining, setIsJoining] = useState(false);
+  const [joinError, setJoinError] = useState('');
+  const [joinSuccess, setJoinSuccess] = useState('');
 
   const handleCopy = () => {
     if (!farmId) return;
@@ -69,6 +73,26 @@ export function TeamManagement({ team, farmId }: { team: any[], farmId?: string 
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
             </button>
           </div>
+        </div>
+        <div>
+          <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-2">Join a Farm</h4>
+          <form onSubmit={handleJoin} className="flex items-center gap-2">
+            <input
+              value={joinCodeInput}
+              onChange={(e) => setJoinCodeInput(e.target.value)}
+              placeholder="Enter join code"
+              className="flex-1 p-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm"
+            />
+            <button
+              type="submit"
+              disabled={isJoining}
+              className="p-2 bg-blue-600 text-white rounded-lg hover:opacity-90 disabled:opacity-50"
+            >
+              {isJoining ? 'Joining...' : 'Join'}
+            </button>
+          </form>
+          {joinError && <p className="text-xs text-red-500 mt-2">{joinError}</p>}
+          {joinSuccess && <p className="text-xs text-emerald-600 mt-2">{joinSuccess}</p>}
         </div>
       </div>
     </div>
